@@ -1,3 +1,19 @@
+#!/usr/bin/env python
+#
+# Copyright 2025 The Krkn Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import datetime
@@ -165,8 +181,10 @@ def critical_alerts(
 
     if not firing_alerts:
         logging.info("No critical alerts are firing!!")
-    
-   
+
+    return firing_alerts
+
+
 def metrics(
     prom_cli: KrknPrometheus,
     elastic: KrknElastic,
@@ -243,37 +261,37 @@ def metrics(
                         pass
         telemetry_json = json.loads(telemetry_json)
         for scenario in telemetry_json['scenarios']:
-            for k,v in scenario["affected_pods"].items():
+            for pod_type, pod_list in scenario["affected_pods"].items():
                 metric_name = "affected_pods_recovery"
-                metric = {"metricName": metric_name, "type": k}
-                if type(v) is list:
-                    for pod in v:
-                        for k,v in pod.items():
-                            metric[k] = v
+                metric = {"metricName": metric_name, "type": pod_type}
+                if type(pod_list) is list:
+                    for pod in pod_list:
+                        for pod_k, pod_v in pod.items():
+                            metric[pod_k] = pod_v
                             metric['timestamp'] = str(datetime.datetime.now())
                         logging.debug("adding pod %s", metric)
                         metrics_list.append(metric.copy())
             for affected_node in scenario["affected_nodes"]:
                 metric_name = "affected_nodes_recovery"
                 metric = {"metricName": metric_name}
-                for k,v in affected_node.items():
-                    metric[k] = v
+                for node_k, node_v in affected_node.items():
+                    metric[node_k] = node_v
                     metric['timestamp'] = str(datetime.datetime.now())
                 metrics_list.append(metric.copy())
         if telemetry_json['health_checks']:
             for health_check in telemetry_json["health_checks"]:
                     metric_name = "health_check_recovery"
                     metric = {"metricName": metric_name}
-                    for k,v in health_check.items():
-                        metric[k] = v
+                    for hc_k, hc_v in health_check.items():
+                        metric[hc_k] = hc_v
                         metric['timestamp'] = str(datetime.datetime.now())
                     metrics_list.append(metric.copy())
         if telemetry_json['virt_checks']:
             for virt_check in telemetry_json["virt_checks"]:
                     metric_name = "virt_check_recovery"
                     metric = {"metricName": metric_name}
-                    for k,v in virt_check.items():
-                        metric[k] = v
+                    for vc_k, vc_v in virt_check.items():
+                        metric[vc_k] = vc_v
                         metric['timestamp'] = str(datetime.datetime.now())
                     metrics_list.append(metric.copy())
 
