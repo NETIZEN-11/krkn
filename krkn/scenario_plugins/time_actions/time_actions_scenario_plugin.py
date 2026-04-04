@@ -28,6 +28,109 @@ from krkn.scenario_plugins.abstract_scenario_plugin import AbstractScenarioPlugi
 
 
 class TimeActionsScenarioPlugin(AbstractScenarioPlugin):
+    def detect_available_shell(
+        self, pod_name, namespace, container_name, kubecli: KrknKubernetes
+    ):
+        """
+        Detect available shell in a container by trying common shell paths.
+        
+        Tries shells in order: /bin/bash → /bin/sh → /busybox/sh
+        
+        Args:
+            pod_name: Name of the pod
+            namespace: Namespace of the pod
+            container_name: Container name within the pod
+            kubecli: Kubernetes client instance
+            
+        Returns:
+            str: Path to available shell, or None if no shell found
+        """
+        shells_to_try = ["/bin/bash", "/bin/sh", "/busybox/sh"]
+        
+        for shell in shells_to_try:
+            try:
+                # Test if shell exists by running a simple command
+                test_command = f"{shell} -c 'echo test'"
+                response = kubecli.exec_cmd_in_pod(
+                    test_command, pod_name, namespace, container_name
+                )
+                
+                if response and "test" in response and "not found" not in response.lower():
+                    logging.debug(f"Detected shell {shell} in pod {pod_name}, container {container_name}")
+                    return shell
+            except Exception as e:
+                logging.debug(f"Shell {shell} not available in pod {pod_name}: {e}")
+                continue
+        
+        logging.warning(
+            f"No standard shell found in pod {pod_name}, container {container_name}. "
+            f"Tried: {', '.join(shells_to_try)}"
+        )
+        return None
+    
+    def exec_with_shell_fallback(
+        self, pod_name, command, namespace, container_name, kubecli: KrknKubernetes
+    ):
+        """
+        Execute command in pod with shell fallback detection.
+        
+        First attempts to detect available shell, then wraps command appropriately.
+        
+        Args:
+            pod_name: Name of the pod
+            command: Command to execute (string)
+            namespace: Namespace of the pod
+            container_name: Container name within the pod
+            kubecli: Kubernetes client instance
+            
+        Returns:
+            Command output string, or False on failure
+        """
+        # Detect available shell
+        shell = self.detect_available_shell(pod_name, namespace, container_name, kubecli)
+        
+        if not shell:
+            logging.error(
+                f"Cannot execute command in pod {pod_name}, container {container_name}: "
+                f"No shell available. Tried /bin/bash, /bin/sh, /busybox/sh"
+            )
+            return False
+        
+        # Wrap command with detected shell
+        if isinstance(command, list):
+            command = " ".join(command)
+        
+        wrapped_command = f"{shell} -c '{command}'"
+        
+        # Execute with retry logic
+        for i in range(5):
+            try:
+                response = kubecli.exec_cmd_in_pod(
+                    wrapped_command, pod_name, namespace, container_name
+                )
+                
+                if not response:
+                    time.sleep(2)
+                    continue
+                elif "unauthorized" in response.lower() or "authorization" in response.lower():
+                    time.sleep(2)
+                    continue
+                elif "exec failed" in response.lower() or "error" in response.lower():
+                    logging.debug(
+                        f"Command execution attempt {i+1}/5 failed in pod {pod_name}: {response}"
+                    )
+                    time.sleep(2)
+                    continue
+                else:
+                    return response
+            except Exception as e:
+                logging.debug(f"Attempt {i+1}/5 failed for pod {pod_name}: {e}")
+                time.sleep(2)
+                continue
+        
+        logging.error(f"Failed to execute command in pod {pod_name} after 5 attempts")
+        return False
+
     def run(
         self,
         run_uuid: str,
@@ -60,6 +163,19 @@ class TimeActionsScenarioPlugin(AbstractScenarioPlugin):
     def pod_exec(
         self, pod_name, command, namespace, container_name, kubecli: KrknKubernetes
     ):
+        """
+        Execute command in pod with retry logic and shell fallback.
+        
+        Args:
+            pod_name: Name of the pod
+            command: Command to execute (string or list)
+            namespace: Namespace of the pod
+            container_name: Container name within the pod
+            kubecli: Kubernetes client instance
+            
+        Returns:
+            Command output string, or False on failure
+        """
         for i in range(5):
             response = kubecli.exec_cmd_in_pod(
                 command, pod_name, namespace, container_name
@@ -71,6 +187,22 @@ class TimeActionsScenarioPlugin(AbstractScenarioPlugin):
                 "unauthorized" in response.lower()
                 or "authorization" in response.lower()
             ):
+                time.sleep(2)
+                continue
+            # Check for shell-related errors - try fallback
+            elif "impossible to determine the shell" in response.lower():
+                logging.warning(
+                    f"Shell detection failed in pod {pod_name}, container {container_name}. "
+                    f"Attempting shell fallback detection..."
+                )
+                # Try shell fallback
+                return self.exec_with_shell_fallback(
+                    pod_name, command, namespace, container_name, kubecli
+                )
+            elif "exec failed" in response.lower() or "error" in response.lower():
+                logging.debug(
+                    f"Command execution attempt {i+1}/5 failed in pod {pod_name}: {response}"
+                )
                 time.sleep(2)
                 continue
             else:
